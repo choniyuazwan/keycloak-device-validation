@@ -2,81 +2,58 @@ package id.choniyuazwan.keycloak;
 
 import org.keycloak.authentication.AuthenticationFlowContext;
 import org.keycloak.authentication.AuthenticationFlowError;
-import org.keycloak.authentication.authenticators.browser.AbstractUsernameFormAuthenticator;
 import org.keycloak.authentication.authenticators.directgrant.AbstractDirectGrantAuthenticator;
-import org.keycloak.events.Details;
 import org.keycloak.events.Errors;
 import org.keycloak.models.AuthenticationExecutionModel;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.ModelDuplicateException;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
-import org.keycloak.models.utils.KeycloakModelUtils;
 import org.keycloak.provider.ProviderConfigProperty;
 import org.keycloak.services.ServicesLogger;
-import org.keycloak.services.managers.AuthenticationManager;
-
+import org.jboss.logging.Logger;
 import javax.ws.rs.core.MultivaluedMap;
 import javax.ws.rs.core.Response;
-import java.util.LinkedList;
-import java.util.List;
+import java.util.*;
 
-import static org.keycloak.authentication.authenticators.util.AuthenticatorUtils.getDisabledByBruteForceEventError;
-
-/**
- * @author <a href="mailto:bill@burkecentral.com">Bill Burke</a>
- * @version $Revision: 1 $
- */
 public class ValidateDevice extends AbstractDirectGrantAuthenticator {
 
   public static final String PROVIDER_ID = "direct-grant-validate-device";
+  private static final Logger log = Logger.getLogger(ValidateDevice.class);
 
   @Override
   public void authenticate(AuthenticationFlowContext context) {
-    String username = retrieveUsername(context);
-    if (username == null) {
-      context.getEvent().error(Errors.USER_NOT_FOUND);
-      Response challengeResponse = errorResponse(Response.Status.UNAUTHORIZED.getStatusCode(), "invalid_request", "Missing parameter: username");
+    String deviceParam = retrieveDevice(context);
+    if (deviceParam == null) {
+      Response challengeResponse = errorResponse(Response.Status.UNAUTHORIZED.getStatusCode(), "invalid_request", "Missing parameter: device");
+      context.failure(AuthenticationFlowError.INVALID_USER, challengeResponse);
+      return;
+    } else if(deviceParam.trim().isEmpty()) {
+      Response challengeResponse = errorResponse(Response.Status.UNAUTHORIZED.getStatusCode(), "invalid_value", "Device value can't empty");
       context.failure(AuthenticationFlowError.INVALID_USER, challengeResponse);
       return;
     }
-    context.getEvent().detail(Details.USERNAME, username);
-    context.getAuthenticationSession().setAuthNote(AbstractUsernameFormAuthenticator.ATTEMPTED_USERNAME, username);
 
-    UserModel user = null;
+    UserModel user = context.getUser();
+    String deviceUser = user.getAttribute("device").get(0);
+    log.info("deviceUser " + deviceUser);
+    log.info("deviceParam " + deviceParam);
+
     try {
-      user = KeycloakModelUtils.findUserByNameOrEmail(context.getSession(), context.getRealm(), username);
+      if(deviceUser == null || deviceUser.trim().isEmpty()) {
+        user.setAttribute("device", Collections.singletonList(deviceParam));
+      } else if (!deviceUser.equals(deviceParam)) {
+        Response challengeResponse = errorResponse(Response.Status.UNAUTHORIZED.getStatusCode(), "invalid_value", "Invalid device value");
+        context.failure(AuthenticationFlowError.INVALID_USER, challengeResponse);
+        return;
+      }
     } catch (ModelDuplicateException mde) {
       ServicesLogger.LOGGER.modelDuplicateException(mde);
-      Response challengeResponse = errorResponse(Response.Status.UNAUTHORIZED.getStatusCode(), "invalid_request", "Invalid user credentials");
+      Response challengeResponse = errorResponse(Response.Status.UNAUTHORIZED.getStatusCode(), "invalid_request", "Invalid device credentials");
       context.failure(AuthenticationFlowError.INVALID_USER, challengeResponse);
       return;
     }
 
-
-    if (user == null) {
-      context.getEvent().error(Errors.USER_NOT_FOUND);
-      Response challengeResponse = errorResponse(Response.Status.UNAUTHORIZED.getStatusCode(), "invalid_grant", "Invalid user credentials");
-      context.failure(AuthenticationFlowError.INVALID_USER, challengeResponse);
-      return;
-    }
-
-    String bruteForceError = getDisabledByBruteForceEventError(context.getProtector(), context.getSession(), context.getRealm(), user);
-    if (bruteForceError != null) {
-      context.getEvent().user(user);
-      context.getEvent().error(bruteForceError);
-      Response challengeResponse = errorResponse(Response.Status.UNAUTHORIZED.getStatusCode(), "invalid_grant", "Invalid user credentials");
-      context.forceChallenge(challengeResponse);
-      return;
-    }
-
-    if (!user.isEnabled()) {
-      context.getEvent().user(user);
-      context.getEvent().error(Errors.USER_DISABLED);
-      Response challengeResponse = errorResponse(Response.Status.BAD_REQUEST.getStatusCode(), "invalid_grant", "Account disabled");
-      context.forceChallenge(challengeResponse);
-      return;
-    }
     context.setUser(user);
     context.success();
   }
@@ -128,7 +105,7 @@ public class ValidateDevice extends AbstractDirectGrantAuthenticator {
 
   @Override
   public String getHelpText() {
-    return "Validates the username supplied as a 'username' form parameter in direct grant request";
+    return "Validates the device supplied as a 'device' form parameter in direct grant request";
   }
 
   @Override
@@ -141,8 +118,8 @@ public class ValidateDevice extends AbstractDirectGrantAuthenticator {
     return PROVIDER_ID;
   }
 
-  protected String retrieveUsername(AuthenticationFlowContext context) {
+  protected String retrieveDevice(AuthenticationFlowContext context) {
     MultivaluedMap<String, String> inputData = context.getHttpRequest().getDecodedFormParameters();
-    return inputData.getFirst(AuthenticationManager.FORM_USERNAME);
+    return inputData.getFirst("device");
   }
 }
